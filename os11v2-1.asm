@@ -2,740 +2,617 @@
 ; OS11 Kernel
 ;
 ; Original kernal written by Andrew Mischock and Jonathan Dunder
-;       for CS384 - Operating Systems [2.14.2006]
+;       for CS384 - Operating Systems [2006.02.14]
 ;
 ; Modifications made by Andrew Mischock
-;       for CS391 - Embedded System Design [3.26.2006]
+;       for CS391 - Embedded System Design [2006.03.26]
+;
+; Major refactoring and optimizations by Tony Papadimitriou [-480 bytes]
+;       for fun - [2020.12.06]
 ;*******************************************************************************
 
+                    #CaseOn
+                    #ExtraOn
                     #Uses     creg.inc
                     #Uses     mem.inc
 
-P7stack             equ       0xD8FF
-P6stack             equ       0xD9FF
-P5stack             equ       0xDAFF
-P4stack             equ       0xDBFF
-P3stack             equ       0xDCFF
-P2stack             equ       0xDDFF
-P1stack             equ       0xDEFF
-P0stack             equ       0xDFFF
-RTIVEC              equ       0x00EB
+BUS_KHZ             def       2000
 
+CR                  equ       0x0D
+LF                  equ       0x0A
+
+LCD_COLS            equ       16
+LCD_DATA            equ       PORTF
+
+PROCESSES           equ       8
+
+                    #temp     0xD8FF
+P7_STACK            next      :temp,256
+P6_STACK            next      :temp,256
+P5_STACK            next      :temp,256
+P4_STACK            next      :temp,256
+P3_STACK            next      :temp,256
+P2_STACK            next      :temp,256
+P1_STACK            next      :temp,256
+P0_STACK            next      :temp,256
+
+Vrti                equ       0x00EB
+
+;*******************************************************************************
+; Macros
+;*******************************************************************************
+
+?motor              macro
+          #ifdef MOTOR
+                    lda       ~1~
+                    sta       MOTOR
+          #endif
+                    endm
+
+;*******************************************************************************
+                    #RAM
+;*******************************************************************************
                     org       DATA
-PROCTBL             rmb       48
-SLEEPD1             rmb       1
-SLEEPD2             rmb       1
-BUFFER              rmb       20
-BUFFPTR             rmb       1
-CONVR               rmb       1
-DEB                 rmb       1
-KVAR                rmb       1
-PROCNUM             rmb       1
-PSDAT               fcb       "PID STATE CPUTIME AGE PRIORITY",0x0A
-WLCM                fcb       "WELCOME TO OS11",0x0A
-PSLCD1              fcb       "01234567    OS11"
-SHUTDOW             fcb       "SHUTTING DOWN"
-ADCT1               fcb       "PE =    mV  OS11"
-ADCT2               fcb       "             ADC"
-SVAR                rmb       1
-PSLCD2              rmb       16
-SNDTMP              rmb       1
-DTEMP               rmb       2
-DTEMP2              rmb       2
-ONES                rmb       1
-TENS                rmb       1
-HDRDS               rmb       1
-THSDS               rmb       1
 
-; **********
-; Bootstrap
-; **********
+proc_table          rmb       6*PROCESSES
+buffer              rmb       20
+buf_index           rmb       1
+kvar                rmb       1
+proc_number         rmb       1
+svar                rmb       1
+pslcd2              rmb       LCD_COLS
+sndtmp              rmb       1
 
-                    org       RTIVEC
-                    jmp       ISR
+;*******************************************************************************
+                    #VECTORS                      ;Bootstrap
+;*******************************************************************************
 
+                    org       Vrti
+                    jmp       RTI_Handler
+
+;*******************************************************************************
+                    #ROM
+;*******************************************************************************
                     org       CODE
 
-BOOT                lds       #STACK              ; OS Boot sequence
+Start               proc
+                    lds       #STACK              ;OS Boot sequence
                     sei
-                    ldaa      PACTL
-                    oraa      #%00001001          ; Set PA3 to O, 8MHz XTAL (8.192ms)
-                    staa      PACTL
-                    ldaa      TMSK2
-                    oraa      #%01000000
-                    staa      TMSK2
-;                   ldaa      #0
-;                   staa      DDRC                ; PC1 used for reset button on Fox11
-                    ldaa      #0x30
-                    staa      BAUD
-                    ldaa      #0x0C
-                    staa      SCCR2
-
-INITP0              lds       #P0stack
-                    ldx       #P0
-                    pshx
+                    lda       PACTL
+                    ora       #%00001001          ;Set PA3 to O, 8MHz XTAL (8.192ms)
+                    sta       PACTL
+                    lda       TMSK2
+                    ora       #%01000000
+                    sta       TMSK2
+;                   clr       DDRC                ;PC1 used for reset button on Fox11
+                    lda       #'0'
+                    sta       BAUD
+                    lda       #0x0C
+                    sta       SCCR2
                     clra
-                    psha:7
-                    ldy       #PROCTBL
-                    tsx
-                    stx       0,Y
-                    ldaa      #0
-                    staa      2,Y                 ; sleep state (1 is sleeping)
-                    staa      3,Y                 ; CPU time
-                    ldaa      #0
-                    staa      4,Y                 ; aging
-                    staa      5,Y                 ; priority is on the end
-
-INITP1              lds       #P1stack
-                    ldx       #P1
+          ;--------------------------------------
+?                   macro
+                    #temp     ~1~*6
+                    lds       #P~1~_STACK
+                    ldx       #P~1~
                     pshx
-                    clra
-                    psha:7
-                    ldy       #PROCTBL
-                    tsx
-                    stx       6,Y
-                    ldaa      #0
-                    staa      8,Y
-                    staa      9,Y
-                    ldaa      #0
-                    staa      10,Y
-                    staa      11,Y
-
-INITP2              lds       #P2stack
-                    ldx       #P2
-                    pshx
-                    clra
-                    psha:7
-                    ldy       #PROCTBL
-                    tsx
-                    stx       12,Y
-                    ldaa      #0
-                    staa      14,Y
-                    staa      15,Y
-                    ldaa      #0
-                    staa      16,Y
-                    staa      17,Y
-
-INITP3              lds       #P3stack
-                    ldx       #P3
-                    pshx
-                    clra
-                    psha:7
-                    ldy       #PROCTBL
-                    tsx
-                    stx       18,Y
-                    ldaa      #0
-                    staa      20,Y
-                    staa      21,Y
-                    ldaa      #0
-                    staa      22,Y
-                    staa      23,Y
-
-INITP4              lds       #P4stack
-                    ldx       #P4
-                    pshx
-                    clra
-                    psha:7
-                    ldy       #PROCTBL
-                    tsx
-                    stx       24,Y
-                    ldaa      #0
-                    staa      26,Y
-                    staa      27,Y
-                    ldaa      #0
-                    staa      28,Y
-                    staa      29,Y
-
-INITP5              lds       #P5stack
-                    ldx       #P5
-                    pshx
-                    clra
-                    psha:7
-                    ldy       #PROCTBL
-                    tsx
-                    stx       30,Y
-                    ldaa      #0
-                    staa      32,Y
-                    staa      33,Y
-                    ldaa      #0
-                    staa      34,Y
-                    staa      35,Y
-
-INITP6              lds       #P6stack
-                    ldx       #P6
-                    pshx
-                    clra
-                    psha:7
-                    ldy       #PROCTBL
-                    tsx
-                    stx       36,Y
-                    ldaa      #0
-                    staa      38,Y
-                    staa      39,Y
-                    ldaa      #0
-                    staa      40,Y
-                    staa      41,Y
-
-INITP7              lds       #P7stack
-                    ldx       #P7
-                    pshx
-                    clra
-                    psha:7
-                    ldy       #PROCTBL
-                    tsx
-                    stx       42,Y
-                    ldaa      #0
-                    staa      44,Y
-                    staa      45,Y
-                    ldaa      #0
-                    staa      46,Y
-                    staa      47,Y
-
-                    ldaa      #0                  ; Initialize variables
-                    staa      KVAR
-                    staa      SVAR
+                    ldb       #7
+Loop$$$             psha
+                    decb
+                    bne       Loop$$$
+                    ldx       #proc_table
+                    tsy
+                    sty       :temp,x
+                    clr       :temp+2,x           ;sleep state (1 is sleeping)
+                    clr       :temp+3,x           ;CPU time
+                    clr       :temp+4,x           ;aging
+                    clr       :temp+5,x           ;priority is on the end
+                    endm
+          ;--------------------------------------
+                    @?        0
+                    @?        1
+                    @?        2
+                    @?        3
+                    @?        4
+                    @?        5
+                    @?        6
+                    @?        7
+          ;-------------------------------------- ;Initialize variables
+                    sta       kvar
+                    sta       svar
                     ldx       #OPTION
-                    bset      0,X,%10000000
-                    ldaa      #%00000111
-                    staa      ADCTL
-                    staa      DDRC
-                    staa      DEB
-                    staa      BUFFPTR
-                    ldaa      #7
-                    staa      PROCNUM
+                    bset      ,x,%10000000
+                    lda       #%00000111
+                    sta       ADCTL
+                    sta       DDRC
+                    sta       buf_index
+                    lda       #PROCESSES-1
+                    sta       proc_number
+          ;--------------------------------------
+                    jsr       InitLCD             ;Initialize the LCD
+                    ldx       #WLCM               ;Intro Message to LCD
+                    jsr       LCD_PutChar
+                    bsr       WelcomeSound
+                    cli                           ;Enable interrupts
+                    jmp       P7                  ;Start with P7
 
-                    jsr       LCD_INI             ; Initialize the LCD
-
-                    ldx       #WLCM               ; Intro Message to LCD
-                    ldab      #15
-                    jsr       LCDOUT
-
-                    bsr       WSND
-
-ENDB                cli                           ; Enable interrupts
-                    jmp       P7                  ; Start with P7
-
-WSND                ldaa      #30                 ; Welcome Sound
-                    ldab      #30
-                    jsr       PLAYSND
-                    ldaa      #35
-                    ldab      #28
-                    jsr       PLAYSND
-                    ldaa      #40
-                    ldab      #26
-                    bsr       PLAYSND
-                    ldaa      #45
-                    ldab      #24
-                    bsr       PLAYSND
-                    ldaa      #50
-                    ldab      #22
-                    bsr       PLAYSND
-                    rts
-
-; **************************
+;*******************************************************************************
 ; Interrupt Service Routine
-; **************************
-ISR                 ldy       #PROCTBL            ; Increment process' CPU time
-                    ldab      PROCNUM
-                    addb:5    PROCNUM
-                    aby
-                    inc       3,Y
-                    tsx                           ; Store state of process
-                    stx       0,Y
+;*******************************************************************************
 
-ISR0                ldab      PROCNUM
-                    cmpb      #0x00
-                    bne       ISR1                ; Make sure process number doesn't go below 0
-                    ldab      #8
-ISR1                decb
-                    stab      PROCNUM
-                    addb:5    PROCNUM
-                    ldy       #PROCTBL
+RTI_Handler         proc
+                    ldy       #proc_table         ;Increment process' CPU time
+                    ldb       proc_number
+                    lda       #6
+                    mul
                     aby
-                    ldaa      2,Y
-                    cmpa      #1                  ; Check if sleeping
-                    beq       ISR0
-ISR2                ldaa      4,Y
-                    brclr     4,Y,%11111111,ISR3
+                    inc       3,y
+                    tsx                           ;Store state of process
+                    stx       ,y
+Loop@@              ldb       proc_number
+                    bne       _1@@                ;Make sure process number doesn't go below 0
+                    ldb       #PROCESSES
+_1@@                decb
+                    stb       proc_number
+          ;--------------------------------------
+                    lda       #6
+                    mul
+                    ldy       #proc_table
+                    aby
+                    lda       2,y
+                    cmpa      #1                  ;Check if sleeping
+                    beq       Loop@@
+          ;--------------------------------------
+                    lda       4,y
+                    brclr     4,y,%11111111,_2@@
                     deca
-                    staa      4,Y
-                    bra       ISR0
-
-ISR3                ldaa      5,Y
-                    staa      4,Y
-ISR4                ldx       0,Y                 ; If not sleeping, run process
+                    sta       4,y
+                    bra       Loop@@
+_2@@                lda       5,y
+                    sta       4,y
+                    ldx       ,y                  ;If not sleeping, run process
                     txs
-                    ldaa      SVAR
-                    cmpa      #0xFF
-                    beq       INFL
-                    ldaa      #%01000000
-                    staa      TFLG2
+                    lda       svar
+                    coma
+                    bne       Done@@
+          ;-------------------------------------- ;endless loop [HALT]
+Halt@@              sei
+                    bra       Halt@@
+          ;--------------------------------------
+Done@@              lda       #%01000000
+                    sta       TFLG2
                     rti
 
-INFL                sei
-                    bra       INFL
+;*******************************************************************************
 
-; ***********
-; Processes
-; ***********
+WelcomeSound        proc
+                    ldd       #$1E1E
+                    bsr       PlaySound
+                    ldd       #$231C
+                    bsr       PlaySound
+                    ldd       #$281A
+                    bsr       PlaySound
+                    ldd       #$2D18
+                    bsr       PlaySound
+                    ldd       #$3216
+;                   bra       PlaySound
 
-;****************
-; Sound Routine
-;
-PLAYSND             staa      SNDTMP
-RETSND              ldaa      PORTA
-                    oraa      #%00001000
-                    staa      PORTA
-                    ldaa      SNDTMP
-UP                  jsr       WAIT20THMS
+;*******************************************************************************
+
+PlaySound           proc
+                    sta       sndtmp
+Loop@@              lda       PORTA
+                    ora       #%00001000
+                    sta       PORTA
+                    lda       sndtmp
+Up@@                jsr       Wait20th_ms
                     deca
-                    cmpa      #0
-                    beq       DOWNS
-                    bra       UP
-
-DOWNS               ldaa      PORTA
+                    bne       Up@@
+                    lda       PORTA
                     anda      #%11110111
-                    staa      PORTA
-                    ldaa      SNDTMP
-DOWN                jsr       WAIT20THMS
+                    sta       PORTA
+                    lda       sndtmp
+Down@@              jsr       Wait20th_ms
                     deca
-                    cmpa      #0
-                    beq       DOWNE
-                    bra       DOWN
+                    bne       Down@@
+                    decb
+                    bne       Loop@@
+                    rts
 
-DOWNE               decb
-                    cmpb      #0
-                    beq       ENDSND
-                    bra       RETSND
+;*******************************************************************************
 
-ENDSND              rts
-
-
-;************************
-; P7: Serial Port Shell
-;
-P7                  ldx       #SCSR
-P70                ;ldaa      #0xF7
-;                   staa      MOTOR
-                    brset     0,X,%00100000,P71
-                    bra       P70
-
-P71                 ldaa      SCDR
-                    ldx       #BUFFER
-                    ldab      BUFFPTR
-                    abx
-                    staa      0,X
-                    incb
-                    stab      BUFFPTR
+GetChar             proc
+                    pshx
                     ldx       #SCSR
-                    cmpa      #0x0D
-                    beq       P75
-P72                 brset     0,X,%10000000,P73
-                    bra       P72
+                    brclr     ,x,%00100000,*
+                    lda       SCDR-SCSR,x
+                    pulx
+                    rts
 
-P73                 staa      SCDR
-P74                 brclr     0,X,%01000000,P7
-                    bra       P74
+;*******************************************************************************
+; P7: Serial Port Shell
 
-P75                 brset     0,X,%10000000,P7501
-                    bra       P75
-
-P7501               ldaa      #0x0A
-                    staa      SCDR
-P76                 brclr     0,X,%01000000,P77
-                    bra       P76
-
-P77                 brset     0,X,%10000000,P770
-                    bra       P77
-
-P770                ldaa      #0x3E
-                    staa      SCDR
-P78                 brclr     0,X,%01000000,INPT
-                    bra       P78
-
-P7B                 ldaa      #0                  ; Clear input buffer and return
-                    staa      BUFFPTR
-                    bra       P7
-
-; Check input buffer
-INPT                ldab      BUFFPTR
-                    cmpb      #3
-                    beq       INPT1
-                    cmpb      #5
-;                   beq       ADCF
-                    cmpb      #7
-;                   beq       REBOOT
-                    cmpb      #9
-;                   beq       SHDOWNJ
-                    cmpb      #10
-;                   beq       MD
-                    cmpb      #15
-;                   beq       MM
-                    bra       P7B
-
-INPT1               ldx       #BUFFER
-                    ldaa      0,X
-                    cmpa      #0x70
-                    beq       PS
-                    cmpa      #0x73
-                    beq       SX1
-                    cmpa      #0x72
-                    beq       RX1
-                    bra       P7B
-
-; Jump Extentions
-SX1                 jmp       SX
-RX1                 jmp       RX
-
-; Display PS
-PS                  ldab      #0
-PS1                 ldx       #PSDAT
-                    cmpb      #31
-                    beq       PS2
+MainLoop            proc
+                    clr       buf_index           ;Clear input buffer and return
+Loop@@              bsr       GetChar
+                   ;@?motor   #0xF7
+          ;--------------------------------------
+                    ldx       #buffer
+                    ldb       buf_index
                     abx
-                    ldaa      0,X
-                    jsr       SEND
-                    incb
-                    bra       PS1
+                    sta       ,x
+                    inc       buf_index
+          ;--------------------------------------
+                    cmpa      #CR
+                    beq       _2@@
+                    jsr       PutChar
+                    bra       Loop@@
+          ;--------------------------------------
+_2@@                lda       #LF
+                    jsr       PutChar
+                    lda       #'>'
+                    jsr       PutChar
+;                   bra       CheckInputBuffer
 
-PS2                 ldx       #PROCTBL
-                    ldab      #0
-                    ldy       #PSLCD2
-PS3                 ldaa      #0x20
-                    jsr       SEND
-                    ldaa      #0x20
-                    jsr       SEND
-                    stab      CONVR               ; PID
-                    jsr       CONV
-                    ldaa      #0x20
-                    jsr       SEND
-                    ldaa      #0x20
-                    jsr       SEND
-                    ldaa      2,X                 ; STATE
-                    adda      #0x52               ; add 0x52 so: 0=>R & 1=>S
-                    staa      0,Y                 ; store in PSLCD2
-                    ldaa      2,X                 ; reload STATE
-                    staa      CONVR
-                    jsr       CONV
-                    ldaa      #0x20
-                    jsr       SEND
-                    ldaa      #0x20
-                    jsr       SEND
-                    ldaa      #0x20
-                    jsr       SEND
-                    ldaa      #0x20
-                    jsr       SEND
-                    ldaa      3,X                 ; CPUTIME
-                    staa      CONVR
-                    jsr       CONV
-                    ldaa      #0x20
-                    jsr       SEND
-                    ldaa      #0x20
-                    jsr       SEND
-                    ldaa      #0x20
-                    jsr       SEND
-                    ldaa      #0x20
-                    jsr       SEND
-                    ldaa      #0x20
-                    jsr       SEND
-                    ldaa      4,X                 ; AGE
-                    staa      CONVR
-                    jsr       CONV
-                    ldaa      #0x20
-                    jsr       SEND
-                    ldaa      #0x20
-                    jsr       SEND
-                    ldaa      #0x20
-                    jsr       SEND
-                    ldaa      5,X                 ; PRIORITY
-                    staa      CONVR
-                    jsr       CONV
-                    ldaa      #0x0A
-                    jsr       SEND
+;*******************************************************************************
+P7                  equ       Loop@@
+;*******************************************************************************
+
+CheckInputBuffer    proc
+                    ldb       buf_index
+                    cmpb      #3
+                    beq       Go@@
+          #ifdef
+                    cmpb      #5
+                    beq       ADCF
+                    cmpb      #7
+                    beq       REBOOT
+                    cmpb      #9
+                    beq       SHDOWNJ
+                    cmpb      #10
+                    beq       MD
+                    cmpb      #15
+                    beq       MM
+          #endif
+                    bra       MainLoop
+
+Go@@                lda       buffer
+                    cmpa      #'p'
+                    beq       PS
+                    cmpa      #'s'
+                    beq       SX
+                    cmpa      #'r'
+                    bne       MainLoop
+;                   bra       RX
+
+;*******************************************************************************
+; Run PX
+
+RX                  proc
+                    bsr       ?Offset
+                    bra       MainLoop
+
+;*******************************************************************************
+; Sleep PX
+
+SX                  proc
+                    bsr       ?Offset
+                    inc       2,x
+                    bra       MainLoop
+
+;*******************************************************************************
+
+?Offset             proc
+                    ldx       #buffer
+                    ldb       1,x
+                    subb      #'0'
+                    ldx       #proc_table
+                    lda       #6
+                    mul
+                    abx
+                    clr       2,x
+                    rts
+
+;*******************************************************************************
+
+Print               proc
+                    pshx
+Loop@@              lda       ,x
+                    beq       Done@@
+                    bsr       PutChar
+                    inx
+                    bra       Loop@@
+Done@@              pulx
+                    rts
+
+;*******************************************************************************
+; Display PS
+
+PS                  proc
+                    ldx       #PSDAT
+                    bsr       Print
+                    ldx       #proc_table
+                    clrb
+                    ldy       #pslcd2
+Loop@@              bsr       PrintSpace2
+                    tba                           ;PID
+                    jsr       ConvertAndSend
+                    bsr       PrintSpace2
+                    lda       2,x                 ;STATE
+                    adda      #'R'                ;add 0x52 so: 0=>R & 1=>S
+                    sta       ,y                  ;store in pslcd2
+                    lda       2,x                 ;reload STATE
+                    bsr       ConvertAndSend
+                    bsr:2     PrintSpace2
+                    lda       3,x                 ;CPUTIME
+                    bsr       ConvertAndSend
+                    bsr:2     PrintSpace2
+                    bsr       PrintSpace
+                    lda       4,x                 ;AGE
+                    bsr       ConvertAndSend
+                    bsr       PrintSpace2
+                    bsr       PrintSpace
+                    lda       5,x                 ;PRIORITY
+                    bsr       ConvertAndSend
+                    lda       #LF
+                    bsr       PutChar
                     incb
                     cmpb      #8
-                    beq       PSEX1
+                    beq       _3@@
                     inx:6
                     iny
-                    jmp       PS3
+                    bra       Loop@@
 
-PSEX1               ldaa      KVAR
+;*******************************************************************************
+
+PrintSpace2         proc
+                    bsr       PrintSpace
+;                   bra       PrintSpace
+                    endp
+
+;*******************************************************************************
+
+PrintSpace          proc
+                    lda       #' '
+;                   bra       PutChar
+                    endp
+
+;*******************************************************************************
+
+PutChar             proc
+                    pshx
+                    ldx       #SCSR
+                    brclr     ,x,%10000000,*
+                    sta       SCDR-SCSR,x
+                    brset     ,x,%01000000,*
+                    pulx
+                    rts
+                    endp
+
+;*******************************************************************************
+
+_3@@                lda       kvar
                     cmpa      #0xF0
-                    beq       PSSD
-PSEX                jsr       LCDCLR              ; PS to LCD
-                    ldx       #PSLCD1
-                    ldab      #16
-                    jsr       LCDOUT              ; PSLCD1
-                    jsr       LCDLINE2
-                    ldx       #PSLCD2
-                    ldaa      #0x20
-                    staa      8,X
-                    staa      9,X
-                    staa      10,X
-                    staa      11,X
-                    staa      12,X
-                    staa      13,X
-                    ldaa      #0x50
-                    staa      14,X
-                    ldaa      #0x53
-                    staa      15,X
-                    ldab      #16
-                    jsr       LCDOUT              ; PSLCD2
-                    jmp       P7B
+                    bne       _4@@
+                    lda       #0xFF
+                    sta       svar
+                    bra       MainLoop@@
+_4@@                jsr       ClearLCD
+                    ldx       #PSLCD1             ;PS to LCD
+                    jsr       LCD_PutChar
+                    jsr       LCD_Line2
+                    ldx       #pslcd2
+                    lda       #' '
+                    sta       8,x
+                    sta       9,x
+                    sta       10,x
+                    sta       11,x
+                    sta       12,x
+                    sta       13,x
+                    lda       #'P'
+                    sta       14,x
+                    lda       #'S'
+                    sta       15,x
+                    jsr       LCD_PutChar
+MainLoop@@          jmp       MainLoop
 
-PSSD                ldaa      #0xFF
-                    staa      SVAR
-                    jmp       P7B
-
-; Sleep PX
-SX                  ldx       #BUFFER
-                    ldab      1,X
-                    subb      #0x30
-                    ldx       #PROCTBL
-                    stab      CONVR
-                    addb:5    CONVR
-                    abx
-                    ldaa      #1
-                    staa      2,X
-                    jmp       P7B
-
-; Run PX
-RX                  ldx       #BUFFER
-                    ldab      1,X
-                    subb      #0x30
-                    ldx       #PROCTBL
-                    stab      CONVR
-                    addb:5    CONVR
-                    abx
-                    ldaa      #0
-                    staa      2,X
-                    jmp       P7B
-
-; Sends an ASCII value
-SEND                pshy
-SEND0               ldy       #SCSR
-                    brset     0,Y,%10000000,SEND1
-                    bra       SEND0
-
-SEND1               staa      SCDR
-SEND2               brclr     0,Y,%01000000,SEND3
-                    bra       SEND2
-
-SEND3               puly
-                    rts
-
+;*******************************************************************************
 ; Convert Binary to ASCII and send
-CONV                pshy
-                    ldy       #SCSR
-                    ldaa      CONVR
-                    lsra
-                    lsra
-                    lsra
-                    lsra
+
+ConvertAndSend      proc
+                    psha
+                    lsra:4
+                    bsr       BinToASCII
+                    bsr       PutChar
+                    pula
+                    bsr       BinToASCII
+                    bra       PutChar
+
+;*******************************************************************************
+
+BinToASCII          proc
                     anda      #%00001111
                     cmpa      #9
-                    ble       LT10
-                    adda      #0x61
-                    suba      #10
-                    bra       CONVA
-
-LT10                adda      #0x30
-CONVA               brset     0,Y,%10000000,CONV0
-                    bra       CONVA
-
-CONV0               staa      SCDR
-CONV1               brclr     0,Y,%01000000,CONV2
-                    bra       CONV1
-
-CONV2               ldaa      CONVR
-                    anda      #%00001111
-                    cmpa      #9
-                    ble       LT102
-                    adda      #0x61
-                    suba      #10
-                    bra       CONVB
-
-LT102               adda      #0x30
-CONVB               brset     0,Y,%10000000,CONV01
-                    bra       CONVB
-
-CONV01              staa      SCDR
-CONV3               brclr     0,Y,%01000000,CONV4
-                    bra       CONV3
-
-CONV4               puly
+                    bls       Digit@@
+                    adda      #'a'-10-'0'
+Digit@@             adda      #'0'
                     rts
 
-;************************
+;*******************************************************************************
 ; P6
-;
-P6                  ldaa      #0xF6               ; Dummy
-;                   staa      MOTOR
-                    bra       P6
 
-P5                  ldaa      #0xF5               ; Dummy
-;                   staa      MOTOR
-                    bra       P5
+P6                  proc
+Loop@@              @?motor   #0xF6               ;Dummy
+                    bra       Loop@@
 
-P4                  ldaa      #0xF4
-;                   staa      MOTOR
-                    bra       P4
+P5                  proc
+Loop@@              @?motor   #0xF5               ;Dummy
+                    bra       Loop@@
 
-P3                  ldaa      #0xF3               ; Dummy
-;                   staa      MOTOR
-                    bra       P3
+P4                  proc
+Loop@@              @?motor   #0xF4               ;Dummy
+                    bra       Loop@@
 
-P2                  ldaa      #0xF2               ; Dummy
-;                   staa      MOTOR
-                    bra       P2
+P3                  proc
+Loop@@              @?motor   #0xF3               ;Dummy
+                    bra       Loop@@
 
-P1                  ldaa      #0xF1               ; Dummy
-;                   staa      MOTOR
-                    bra       P1
+P2                  proc
+Loop@@              @?motor   #0xF2               ;Dummy
+                    bra       Loop@@
 
-P0                  ldaa      #0xF0               ; Dummy
-;                   staa      MOTOR
-                    bra       P0
+P1                  proc
+Loop@@              @?motor   #0xF1               ;Dummy
+                    bra       Loop@@
 
-; **************
+P0                  proc
+Loop@@              @?motor   #0xF0               ;Dummy
+                    bra       Loop@@
+
+;*******************************************************************************
 ; Wait Routines
-;
-WAIT                psha                          ; Wait 15 ms
+
+Wait15ms            proc
+                    pshd
                     tpa
-                    psha
-                    pshx
-                    ldx       #15
-WAIT1               bsr       WAIT1MS
-                    dex
-                    bne       WAIT1
-                    pulx
-                    pula
+                    ldb       #15
+Loop@@              bsr       Wait1ms
+                    decb
+                    bne       Loop@@
                     tap
-                    pula
+                    puld
                     rts
 
-WAIT1MS             psha                          ; Wait 1 ms
+;*******************************************************************************
+
+Wait1ms             proc
+                    pshd
                     tpa
-                    psha
-                    pshx
-                    ldx       #200
-WAIT1MS1            dex
-                    nop:2
-                    bne       WAIT1MS1
-                    pulx
-                    pula
+                    lda       #20
+Loop@@              bsr       Wait20th_ms
+                    decb
+                    bne       Loop@@
                     tap
-                    pula
+                    puld
                     rts
 
-WAIT2MS             psha                          ; Wait 2ms
+;*******************************************************************************
+                              #Cycles
+Wait20th_ms         proc
+                    pshd
                     tpa
-                    psha
-                    pshx
-                    ldx       #400
-WAIT2MS1            dex
-                    nop:2
-                    bne       WAIT2MS1
-                    pulx
-                    pula
+                    ldb       #DELAY@@
+                              #Cycles
+Loop@@              decb
+                    bne       Loop@@
+                              #temp :cycles
                     tap
-                    pula
+                    puld
                     rts
 
-WAIT20THMS          psha                          ; Wait 1/20th ms
-                    tpa
+DELAY@@             equ       BUS_KHZ/20-:cycles-:ocycles/:temp
+#ifdef LCD
+;*******************************************************************************
+
+InitLCD             proc
+                    bsr       Wait15ms
+          ;-------------------------------------- ;Send initialization sequence
+                    ldx       #Table@@
+Loop@@              lda       ,x                  ;A = value
+                    bsr       WriteLCD
+                    inx
+                    lda       ,x                  ;A = extra delay in msec
+                    beq       Cont@@
+Delay@@             bsr       Wait1ms
+                    deca
+                    bne       Delay@@
+Cont@@              inx
+                    cpx       #Table@@+::Table@@
+                    blo       Loop@@
+                    bra       ClearLCD
+;-------------------------------------------------------------------------------
+Table@@             fcb       %00110010,6
+                    fcb       %00110010,1
+                    fcb       %00110010,1
+                    fcb       %00100010,1
+                    fcb       %00100010,0         ;Now in 4-bit mode
+                    fcb       %10000010,0
+                    fcb       %00000010,0         ;Display Off
+                    fcb       %10000010,0
+                    fcb       %00000010,0         ;Return home
+                    fcb       %00100010,0
+                    fcb       %00000010,0         ;Entry mode set
+                    fcb       %01100010,0
+                    fcb       %00000010,0         ;turn display on
+                    fcb       %11110010,0
+                    #size     Table@@
+
+;*******************************************************************************
+
+ClearLCD            proc
+                    lda       #%00000010          ;Clear display
+                    bsr       WriteLCD
+                    lda       #%00010010
+;                   bra       WriteLCD
+
+;*******************************************************************************
+
+WriteLCD            proc
+                    sta       LCD_DATA            ;Write value in A to LCD
+                    bsr       Wait1ms
                     psha
-                    pshx
-                    ldx       #10
-WAIT20THMS1         dex
-                    nop:2
-                    bne       WAIT20THMS1
-                    pulx
+                    anda      #%11111101
+                    sta       LCD_DATA
                     pula
-                    tap
-                    pula
+                    bra       Wait1ms
+
+;*******************************************************************************
+
+LCD_Line2           proc
+                    lda       #%11000010          ;Jump to line 2
+                    bsr       WriteLCD
+                    lda       #%00010010          ;Shift left
+                    bsr:2     WriteLCD
+                    lda       #%00000010
+                    bra       WriteLCD
+
+;*******************************************************************************
+
+LCD_PutChar         proc
+                    ldb       #LCD_COLS
+Loop@@              beq       Done@@
+                    lda       ,x
+                    beq       Done@@
+                    bsr       Send@@
+                    lda       ,x
+                    lsla:4
+                    bsr       Send@@
+                    inx
+                    decb
+                    bra       Loop@@
+          ;--------------------------------------
+Send@@              anda      #%11110000
+                    ora       #%00000011
+                    bra       WriteLCD
+          ;--------------------------------------
+Done@@              equ       :AnRTS
+#endif
+;*******************************************************************************
+
+PSDAT               fcs       'PID STATE CPUTIME AGE PRIORITY',LF
+WLCM                fcs       'WELCOME TO OS11'
+PSLCD1              fcs       '01234567    OS11'
+;                   fcb       'SHUTTING DOWN'
+;                   fcb       'PE =    mV  OS11'
+;                   fcb       '             ADC'
+
+;*******************************************************************************
+#ifndef LCD
                     rts
-
-; **************
-; LCD Rountines
-;
-LCD_INI            ;jsr       WAIT                ;LCD Initialization Sequence
-;                   ldaa      #%00110010
-;                   jsr       LCDWR
-;                   jsr       WAIT2MS
-;                   jsr       WAIT2MS
-;                   jsr       WAIT2MS
-;                   ldaa      #%00110010
-;                   jsr       LCDWR
-;                   jsr       WAIT1MS
-;                   ldaa      #%00110010
-;                   jsr       LCDWR
-;                   jsr       WAIT1MS
-;                   ldaa      #%00100010
-;                   jsr       LCDWR
-;                   jsr       WAIT1MS
-;                   ldaa      #%00100010      ;Now in 4-bit mode
-;                   jsr       LCDWR
-;                   ldaa      #%10000010
-;                   jsr       LCDWR
-;                   ldaa      #%00000010      ;Display Off
-;                   jsr       LCDWR
-;                   ldaa      #%10000010
-;                   jsr       LCDWR
-;                   ldaa      #%00000010      ;Return home
-;                   jsr       LCDWR
-;                   ldaa      #%00100010
-;                   jsr       LCDWR
-;                   ldaa      #%00000010      ;Entry mode set
-;                   jsr       LCDWR
-;                   ldaa      #%01100010
-;                   jsr       LCDWR
-;                   ldaa      #%00000010      ;turn display on
-;                   jsr       LCDWR
-;                   ldaa      #%11110010
-;                   jsr       LCDWR
-;                   jsr       LCDCLR
-                    rts
-
-LCDLINE2           ;ldaa      #%11000010          ;Jump to line 2
-;                   jsr       LCDWR
-;                   ldaa      #%00010010
-;                   jsr       LCDWR
-
-;                   ldaa      #%00010010          ;Shift left
-;                   jsr       LCDWR
-;                   ldaa      #%00000010
-;                   jsr       LCDWR
-                    rts
-
-LCDCLR             ;ldaa      #%00000010          ;Clear display
-;                   jsr       LCDWR
-;                   ldaa      #%00010010
-;                   jsr       LCDWR
-                    rts
-
-LCDWR              ;staa      PORTF               ;Write value in A to LCD
-;                   jsr       WAIT1MS
-;                   anda      #%11111101
-;                   staa      PORTF
-;                   jsr       WAIT1MS
-                    rts
-
-LCDOUT             ;cmpb      #0                  ;Load address of string into X and length into B before calling
-;                   beq       LCOEX
-;                   ldaa      0,X
-;                   anda      #%11110000
-;                   oraa      #%00000011
-;                   jsr       LCDWR
-;                   ldaa      0,X
-;                   lsla
-;                   lsla
-;                   lsla
-;                   lsla
-;                   anda      #%11110000
-;                   oraa      #%00000011
-;                   jsr       LCDWR
-;                   inx
-;                   decb
-;                   bra       LCDOUT
-LCOEX               rts
+InitLCD             def       :AnRTS
+LCD_Line2           def       :AnRTS
+ClearLCD            def       :AnRTS
+WriteLCD            def       :AnRTS
+LCD_PutChar         def       :AnRTS
+#endif
+;*******************************************************************************
