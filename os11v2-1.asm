@@ -120,10 +120,10 @@ Loop$$$             psha
           ;-------------------------------------- ;Initialize variables
                     sta       kvar
                     sta       svar
-                    ldx       #OPTION
-                    bset      ,x,%10000000
+                    ldx       #REGS
+                    bset      [OPTION,x,%10000000
                     lda       #%00000111
-                    sta       ADCTL
+                    sta       [ADCTL,x
                     sta       DDRC
                     sta       buf_index
                     lda       #PROCESSES-1
@@ -141,14 +141,14 @@ Loop$$$             psha
 ;*******************************************************************************
 
 RTI_Handler         proc
-                    ldy       #proc_table         ;Increment process' CPU time
+                    ldx       #proc_table         ;Increment process' CPU time
                     ldb       proc_number
                     lda       #6
                     mul
-                    aby
-                    inc       3,y
-                    tsx                           ;Store state of process
-                    stx       ,y
+                    abx
+                    inc       3,x
+                    tsy                           ;Store state of process
+                    sty       ,x
 Loop@@              ldb       proc_number
                     bne       _1@@                ;Make sure process number doesn't go below 0
                     ldb       #PROCESSES
@@ -157,20 +157,20 @@ _1@@                decb
           ;--------------------------------------
                     lda       #6
                     mul
-                    ldy       #proc_table
-                    aby
-                    lda       2,y
+                    ldx       #proc_table
+                    abx
+                    lda       2,x
                     cmpa      #1                  ;Check if sleeping
                     beq       Loop@@
           ;--------------------------------------
-                    lda       4,y
-                    brclr     4,y,%11111111,_2@@
+                    lda       4,x
+                    brclr     4,x,%11111111,_2@@
                     deca
-                    sta       4,y
+                    sta       4,x
                     bra       Loop@@
-_2@@                lda       5,y
-                    sta       4,y
-                    ldx       ,y                  ;If not sleeping, run process
+_2@@                lda       5,x
+                    sta       4,x
+                    ldx       ,x                  ;If not sleeping, run process
                     txs
                     lda       svar
                     coma
@@ -223,9 +223,9 @@ Down@@              jsr       Wait20th_ms
 
 GetChar             proc
                     pshx
-                    ldx       #SCSR
-                    brclr     ,x,%00100000,*
-                    lda       SCDR-SCSR,x
+                    ldx       #REGS
+                    brclr     [SCSR,x,%00100000,*
+                    lda       [SCDR,x
                     pulx
                     rts
 
@@ -381,9 +381,9 @@ PrintSpace          proc
 
 PutChar             proc
                     pshx
-                    ldx       #SCSR
-                    brclr     ,x,%10000000,*
-                    sta       SCDR-SCSR,x
+                    ldx       #REGS
+                    brclr     [SCSR,x,%10000000,*
+                    sta       [SCDR,x
                     brset     ,x,%01000000,*
                     pulx
                     rts
